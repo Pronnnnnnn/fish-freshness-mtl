@@ -1,0 +1,18 @@
+# Dataset - raw images stay local/Drive, never in git
+01_Dataset/
+05_Checkpoints/*.pt
+05_Checkpoints/*.pth
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+venv/
+.venv/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+
+# Claude
+.claude/
