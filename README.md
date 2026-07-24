@@ -57,7 +57,8 @@ see [Setup](#setup) for how to obtain and mount it.
 | 2 | `02_train_val_test_split.ipynb` | stratified 70/15/15 split |
 | 3 | `03_train_all_experiments.ipynb` | train all 5 models x 3 seeds |
 | 4 | `04_test_set_evaluation.ipynb` | test-set metrics, aggregated over seeds |
-| 5 | `05_gradcam_analysis.ipynb` | per-head Grad-CAM on the best model |
+| 5 | `05_model_comparison.ipynb` | STL vs MTL per task, EW/UW/DWA head-to-head |
+| 6 | `06_gradcam_analysis.ipynb` | per-head Grad-CAM on the best model |
 
 Each notebook clones this repository at the top of its first cell and is
 runnable independently -- Colab does not persist state between notebooks, so
