@@ -29,8 +29,9 @@ def set_seed(seed: int) -> None:
 @dataclass
 class TrainConfig:
     max_epochs: int = 100
-    patience: int = 20
+    patience: int = 15
     lr: float = 1e-4
+    weight_decay: float = 1e-5
     batch_size: int = 32
     num_workers: int = 2
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
@@ -65,7 +66,7 @@ def train_single_task(
     train_loader, val_loader = _make_loaders(train_df, val_df, dataset_root, cfg)
 
     model = SingleTaskModel(num_classes=num_classes, pretrained=True).to(cfg.device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.max_epochs)
     criterion = nn.CrossEntropyLoss()
 
@@ -138,7 +139,7 @@ def train_multitask(
     criterion = nn.CrossEntropyLoss()
 
     params = list(model.parameters()) + list(loss_strategy.parameters())
-    optimizer = torch.optim.AdamW(params, lr=cfg.lr)
+    optimizer = torch.optim.AdamW(params, lr=cfg.lr, weight_decay=cfg.weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.max_epochs)
 
     best_val_loss = float("inf")
