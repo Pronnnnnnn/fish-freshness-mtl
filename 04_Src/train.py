@@ -1,9 +1,11 @@
 """Training loop for single-task and multi-task models.
 
 AdamW with cosine annealing, a fixed learning rate across all models
-(fairness across loss-weighting strategies), early stopping on
-validation loss, full fine-tuning (no frozen layers), cross-entropy per
-task.
+(fairness across loss-weighting strategies), full fine-tuning (no
+frozen layers), cross-entropy per task. The best checkpoint and the
+early-stopping decision are both driven by validation macro F1 -- for
+the multi-task model, the mean of the two heads' F1 -- not validation
+loss.
 """
 import random
 import time
@@ -12,6 +14,7 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 import torch.nn as nn
+from sklearn.metrics import f1_score
 from torch.utils.data import DataLoader
 
 from dataset import FishEyeDataset, eval_transform, make_balanced_sampler, train_transform
@@ -70,7 +73,7 @@ def train_single_task(
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.max_epochs)
     criterion = nn.CrossEntropyLoss()
 
-    best_val_loss = float("inf")
+    best_val_f1 = -float("inf")
     epochs_without_improvement = 0
     history = []
     start_time = time.time()
@@ -94,6 +97,7 @@ def train_single_task(
 
         model.eval()
         val_loss_sum = 0.0
+        val_true, val_pred = [], []
         with torch.no_grad():
             for images, species_idx, freshness_idx in val_loader:
                 labels = (species_idx if task == "species" else freshness_idx).to(cfg.device)
@@ -101,15 +105,20 @@ def train_single_task(
                 logits = model(images)
                 loss = criterion(logits, labels)
                 val_loss_sum += loss.item() * images.size(0)
+                val_true.append(labels.cpu().numpy())
+                val_pred.append(logits.argmax(dim=1).cpu().numpy())
         val_loss = val_loss_sum / len(val_loader.dataset)
+        val_f1 = f1_score(np.concatenate(val_true), np.concatenate(val_pred), average="macro")
 
-        history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss})
+        history.append(
+            {"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss, "val_f1_macro": val_f1}
+        )
 
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
+        if val_f1 > best_val_f1:
+            best_val_f1 = val_f1
             epochs_without_improvement = 0
             torch.save(
-                {"epoch": epoch, "model_state": model.state_dict(), "val_loss": val_loss},
+                {"epoch": epoch, "model_state": model.state_dict(), "val_f1_macro": val_f1},
                 checkpoint_path,
             )
         else:
@@ -118,7 +127,7 @@ def train_single_task(
                 break
 
     elapsed = time.time() - start_time
-    return {"history": history, "best_val_loss": best_val_loss, "training_time_sec": elapsed}
+    return {"history": history, "best_val_f1": best_val_f1, "training_time_sec": elapsed}
 
 
 def train_multitask(
@@ -142,7 +151,7 @@ def train_multitask(
     optimizer = torch.optim.AdamW(params, lr=cfg.lr, weight_decay=cfg.weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.max_epochs)
 
-    best_val_loss = float("inf")
+    best_val_f1 = -float("inf")
     epochs_without_improvement = 0
     history = []
     start_time = time.time()
@@ -182,6 +191,7 @@ def train_multitask(
 
         model.eval()
         val_loss_sum = 0.0
+        species_true, species_pred, freshness_true, freshness_pred = [], [], [], []
         with torch.no_grad():
             for images, species_idx, freshness_idx in val_loader:
                 images = images.to(cfg.device)
@@ -192,19 +202,40 @@ def train_multitask(
                 loss_freshness = criterion(freshness_logits, freshness_idx)
                 total_loss = loss_strategy(loss_species, loss_freshness)
                 val_loss_sum += total_loss.item() * images.size(0)
+                species_true.append(species_idx.cpu().numpy())
+                species_pred.append(species_logits.argmax(dim=1).cpu().numpy())
+                freshness_true.append(freshness_idx.cpu().numpy())
+                freshness_pred.append(freshness_logits.argmax(dim=1).cpu().numpy())
         val_loss = val_loss_sum / len(val_loader.dataset)
 
-        history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss})
+        val_f1_species = f1_score(
+            np.concatenate(species_true), np.concatenate(species_pred), average="macro"
+        )
+        val_f1_freshness = f1_score(
+            np.concatenate(freshness_true), np.concatenate(freshness_pred), average="macro"
+        )
+        val_f1_mean = (val_f1_species + val_f1_freshness) / 2
 
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
+        history.append(
+            {
+                "epoch": epoch,
+                "train_loss": train_loss,
+                "val_loss": val_loss,
+                "val_f1_species": val_f1_species,
+                "val_f1_freshness": val_f1_freshness,
+                "val_f1_mean": val_f1_mean,
+            }
+        )
+
+        if val_f1_mean > best_val_f1:
+            best_val_f1 = val_f1_mean
             epochs_without_improvement = 0
             torch.save(
                 {
                     "epoch": epoch,
                     "model_state": model.state_dict(),
                     "loss_strategy_state": loss_strategy.state_dict(),
-                    "val_loss": val_loss,
+                    "val_f1_mean": val_f1_mean,
                 },
                 checkpoint_path,
             )
@@ -214,4 +245,4 @@ def train_multitask(
                 break
 
     elapsed = time.time() - start_time
-    return {"history": history, "best_val_loss": best_val_loss, "training_time_sec": elapsed}
+    return {"history": history, "best_val_f1": best_val_f1, "training_time_sec": elapsed}
