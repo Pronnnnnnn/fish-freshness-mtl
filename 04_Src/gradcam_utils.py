@@ -47,7 +47,8 @@ def compute_gradcam(
     wrapped.eval()
     target_layers = [get_target_layer(mtl_model)]
 
-    input_batch = image_tensor.unsqueeze(0)
+    device = next(mtl_model.parameters()).device
+    input_batch = image_tensor.unsqueeze(0).to(device)
     if target_class is None:
         with torch.no_grad():
             target_class = int(wrapped(input_batch).argmax(dim=1).item())
