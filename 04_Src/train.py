@@ -81,6 +81,7 @@ def train_single_task(
     for epoch in range(cfg.max_epochs):
         model.train()
         train_loss_sum = 0.0
+        train_correct = 0
         for images, species_idx, freshness_idx in train_loader:
             labels = (species_idx if task == "species" else freshness_idx).to(cfg.device)
             images = images.to(cfg.device)
@@ -91,9 +92,12 @@ def train_single_task(
             loss.backward()
             optimizer.step()
             train_loss_sum += loss.item() * images.size(0)
+            train_correct += (logits.argmax(dim=1) == labels).sum().item()
 
         scheduler.step()
-        train_loss = train_loss_sum / len(train_loader.dataset)
+        n_train = len(train_loader.dataset)
+        train_loss = train_loss_sum / n_train
+        train_accuracy = train_correct / n_train
 
         model.eval()
         val_loss_sum = 0.0
@@ -108,10 +112,20 @@ def train_single_task(
                 val_true.append(labels.cpu().numpy())
                 val_pred.append(logits.argmax(dim=1).cpu().numpy())
         val_loss = val_loss_sum / len(val_loader.dataset)
-        val_f1 = f1_score(np.concatenate(val_true), np.concatenate(val_pred), average="macro")
+        val_true = np.concatenate(val_true)
+        val_pred = np.concatenate(val_pred)
+        val_accuracy = (val_true == val_pred).mean()
+        val_f1 = f1_score(val_true, val_pred, average="macro")
 
         history.append(
-            {"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss, "val_f1_macro": val_f1}
+            {
+                "epoch": epoch,
+                "train_loss": train_loss,
+                "train_accuracy": train_accuracy,
+                "val_loss": val_loss,
+                "val_accuracy": val_accuracy,
+                "val_f1_macro": val_f1,
+            }
         )
 
         if val_f1 > best_val_f1:
@@ -161,6 +175,8 @@ def train_multitask(
         train_loss_sum = 0.0
         train_species_loss_sum = 0.0
         train_freshness_loss_sum = 0.0
+        train_species_correct = 0
+        train_freshness_correct = 0
 
         for images, species_idx, freshness_idx in train_loader:
             images = images.to(cfg.device)
@@ -179,10 +195,14 @@ def train_multitask(
             train_loss_sum += total_loss.item() * batch_size
             train_species_loss_sum += loss_species.item() * batch_size
             train_freshness_loss_sum += loss_freshness.item() * batch_size
+            train_species_correct += (species_logits.argmax(dim=1) == species_idx).sum().item()
+            train_freshness_correct += (freshness_logits.argmax(dim=1) == freshness_idx).sum().item()
 
         scheduler.step()
         n_train = len(train_loader.dataset)
         train_loss = train_loss_sum / n_train
+        train_accuracy_species = train_species_correct / n_train
+        train_accuracy_freshness = train_freshness_correct / n_train
 
         if isinstance(loss_strategy, DynamicWeightAveraging):
             loss_strategy.update_epoch_losses(
@@ -207,20 +227,26 @@ def train_multitask(
                 freshness_true.append(freshness_idx.cpu().numpy())
                 freshness_pred.append(freshness_logits.argmax(dim=1).cpu().numpy())
         val_loss = val_loss_sum / len(val_loader.dataset)
+        species_true = np.concatenate(species_true)
+        species_pred = np.concatenate(species_pred)
+        freshness_true = np.concatenate(freshness_true)
+        freshness_pred = np.concatenate(freshness_pred)
 
-        val_f1_species = f1_score(
-            np.concatenate(species_true), np.concatenate(species_pred), average="macro"
-        )
-        val_f1_freshness = f1_score(
-            np.concatenate(freshness_true), np.concatenate(freshness_pred), average="macro"
-        )
+        val_accuracy_species = (species_true == species_pred).mean()
+        val_accuracy_freshness = (freshness_true == freshness_pred).mean()
+        val_f1_species = f1_score(species_true, species_pred, average="macro")
+        val_f1_freshness = f1_score(freshness_true, freshness_pred, average="macro")
         val_f1_mean = (val_f1_species + val_f1_freshness) / 2
 
         history.append(
             {
                 "epoch": epoch,
                 "train_loss": train_loss,
+                "train_accuracy_species": train_accuracy_species,
+                "train_accuracy_freshness": train_accuracy_freshness,
                 "val_loss": val_loss,
+                "val_accuracy_species": val_accuracy_species,
+                "val_accuracy_freshness": val_accuracy_freshness,
                 "val_f1_species": val_f1_species,
                 "val_f1_freshness": val_f1_freshness,
                 "val_f1_mean": val_f1_mean,
