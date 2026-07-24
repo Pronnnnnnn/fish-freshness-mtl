@@ -61,9 +61,12 @@ def train_single_task(
     checkpoint_path,
     seed: int,
     cfg: TrainConfig = TrainConfig(),
+    run_name: str = "",
+    verbose: bool = True,
 ):
     assert task in ("species", "freshness")
     set_seed(seed)
+    log_prefix = f"[{run_name}] " if run_name else ""
 
     num_classes = 8 if task == "species" else 3
     train_loader, val_loader = _make_loaders(train_df, val_df, dataset_root, cfg)
@@ -131,16 +134,30 @@ def train_single_task(
         if val_f1 > best_val_f1:
             best_val_f1 = val_f1
             epochs_without_improvement = 0
+            marker = " (best, checkpoint saved)"
             torch.save(
                 {"epoch": epoch, "model_state": model.state_dict(), "val_f1_macro": val_f1},
                 checkpoint_path,
             )
         else:
             epochs_without_improvement += 1
-            if epochs_without_improvement >= cfg.patience:
-                break
+            marker = f" (no improvement, {epochs_without_improvement}/{cfg.patience})"
+
+        if verbose:
+            print(
+                f"{log_prefix}epoch {epoch}: train_loss={train_loss:.4f} "
+                f"train_acc={train_accuracy:.4f} val_loss={val_loss:.4f} "
+                f"val_acc={val_accuracy:.4f} val_f1={val_f1:.4f}{marker}"
+            )
+
+        if epochs_without_improvement >= cfg.patience:
+            if verbose:
+                print(f"{log_prefix}early stopping at epoch {epoch} (best val_f1={best_val_f1:.4f})")
+            break
 
     elapsed = time.time() - start_time
+    if verbose:
+        print(f"{log_prefix}done in {elapsed / 60:.1f} min, best val_f1={best_val_f1:.4f}")
     return {"history": history, "best_val_f1": best_val_f1, "training_time_sec": elapsed}
 
 
@@ -152,8 +169,11 @@ def train_multitask(
     checkpoint_path,
     seed: int,
     cfg: TrainConfig = TrainConfig(),
+    run_name: str = "",
+    verbose: bool = True,
 ):
     set_seed(seed)
+    log_prefix = f"[{run_name}] " if run_name else ""
 
     train_loader, val_loader = _make_loaders(train_df, val_df, dataset_root, cfg)
 
@@ -256,6 +276,7 @@ def train_multitask(
         if val_f1_mean > best_val_f1:
             best_val_f1 = val_f1_mean
             epochs_without_improvement = 0
+            marker = " (best, checkpoint saved)"
             torch.save(
                 {
                     "epoch": epoch,
@@ -267,8 +288,21 @@ def train_multitask(
             )
         else:
             epochs_without_improvement += 1
-            if epochs_without_improvement >= cfg.patience:
-                break
+            marker = f" (no improvement, {epochs_without_improvement}/{cfg.patience})"
+
+        if verbose:
+            print(
+                f"{log_prefix}epoch {epoch}: train_loss={train_loss:.4f} "
+                f"val_loss={val_loss:.4f} val_f1_species={val_f1_species:.4f} "
+                f"val_f1_freshness={val_f1_freshness:.4f} val_f1_mean={val_f1_mean:.4f}{marker}"
+            )
+
+        if epochs_without_improvement >= cfg.patience:
+            if verbose:
+                print(f"{log_prefix}early stopping at epoch {epoch} (best val_f1_mean={best_val_f1:.4f})")
+            break
 
     elapsed = time.time() - start_time
+    if verbose:
+        print(f"{log_prefix}done in {elapsed / 60:.1f} min, best val_f1_mean={best_val_f1:.4f}")
     return {"history": history, "best_val_f1": best_val_f1, "training_time_sec": elapsed}
