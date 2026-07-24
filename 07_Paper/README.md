@@ -14,10 +14,11 @@ https://iceltics.usk.ac.id/paper-template/
 | Method - loss weighting | EW/UW/DWA equations from `04_Src/loss_weighting.py` | equations only, no derivation |
 | Results - main table | `06_Results/metrics/multitask_test_results.csv`, aggregated mean +/- std | 5 models x {accuracy, F1, joint accuracy} at minimum; MCC/Kappa/QWK can be mentioned in text if space is tight |
 | Results - efficiency | `params` / `inference_ms` columns | one sentence, or two extra columns on the main table |
+| Results - convergence | `06_Results/figures/curves/<best_run>.png` + `training_summary.csv` | at most 1 representative curve (best model), plus one sentence citing epoch range and training time; not all 15 curves |
 | Results - interpretability | 2-3 best examples from `06_Results/figures/gradcam/` | a small selection, not the full species x freshness grid |
 
 ## Out of scope for the manuscript
 
 Schedule, detailed hyperparameter justification, per-seed variance tables,
-full 24-cell class distribution, and hardware specifications belong in
-supplementary material only.
+full 24-cell class distribution, hardware specifications, and the full set
+of 15 training curves belong in supplementary material only.
