@@ -27,6 +27,13 @@ def plot_single_task_curves(history: list[dict], title: str, save_path: str | No
 
 
 def plot_multitask_curves(history: list[dict], title: str, save_path: str | None = None):
+    """Loss plus per-task accuracy curves.
+
+    Covers both the two-head models and the flat 24-class one. The flat model
+    trains on a single combined label, so it has no per-task training
+    accuracy -- only its validation curves are per task, and the training
+    panel falls back to its combined accuracy.
+    """
     df = pd.DataFrame(history)
     fig, axes = plt.subplots(1, 3, figsize=(15, 4))
 
@@ -34,13 +41,13 @@ def plot_multitask_curves(history: list[dict], title: str, save_path: str | None
     axes[0].plot(df["epoch"], df["val_loss"], label="val")
     axes[0].set_title("Loss"); axes[0].set_xlabel("epoch"); axes[0].legend()
 
-    axes[1].plot(df["epoch"], df["train_accuracy_species"], label="train")
-    axes[1].plot(df["epoch"], df["val_accuracy_species"], label="val")
-    axes[1].set_title("Species Accuracy"); axes[1].set_xlabel("epoch"); axes[1].legend()
-
-    axes[2].plot(df["epoch"], df["train_accuracy_freshness"], label="train")
-    axes[2].plot(df["epoch"], df["val_accuracy_freshness"], label="val")
-    axes[2].set_title("Freshness Accuracy"); axes[2].set_xlabel("epoch"); axes[2].legend()
+    is_flat = "train_accuracy_combined" in df.columns
+    for ax, task in zip(axes[1:], ["species", "freshness"]):
+        train_col = "train_accuracy_combined" if is_flat else f"train_accuracy_{task}"
+        train_label = "train (combined)" if is_flat else "train"
+        ax.plot(df["epoch"], df[train_col], label=train_label)
+        ax.plot(df["epoch"], df[f"val_accuracy_{task}"], label="val")
+        ax.set_title(f"{task.capitalize()} Accuracy"); ax.set_xlabel("epoch"); ax.legend()
 
     fig.suptitle(title)
     plt.tight_layout()

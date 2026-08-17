@@ -35,15 +35,30 @@ see [Setup](#setup) for how to obtain and mount it.
 07_Paper/         manuscript draft and figures
 ```
 
+`SPEC.md` at the repository root is the authoritative description of the
+experimental design; where code and spec disagree, the spec wins.
+
 ## Models compared
 
-| Model | Heads | Loss |
-|---|---|---|
-| A | species only | cross-entropy |
-| B | freshness only | cross-entropy |
-| C-EW | species + freshness | equal weighting |
-| C-UW | species + freshness | uncertainty weighting |
-| C-DWA | species + freshness | dynamic weight averaging |
+| Model | Scheme | Heads | Loss |
+|---|---|---|---|
+| A | single-task | species (8) | cross-entropy |
+| B | single-task | freshness (3) | cross-entropy |
+| C | flat 24-class | combined (24) | cross-entropy |
+| D-EW | multi-task | 8 + 3 | equal weighting |
+| D-UW | multi-task | 8 + 3 | uncertainty weighting |
+| D-DWA | multi-task | 8 + 3 | dynamic weight averaging |
+
+6 configurations x 3 seeds = 18 runs.
+
+## Splitting
+
+Images are split by **time group**, not individually. Filenames carry a
+camera timestamp, and frames sharing one second are a burst of the same
+fish eye; splitting per image put 33.7% of the test set within reach of a
+near-duplicate in training. Groups are stratified on the species x
+freshness combination, drawn once under a split seed kept separate from the
+training seeds, and stored in `02_Manifests/split_manifest.csv`.
 
 ## Setup
 
@@ -54,11 +69,11 @@ see [Setup](#setup) for how to obtain and mount it.
 | # | Notebook | Purpose |
 |---|---|---|
 | 1 | `01_dataset_verification.ipynb` | integrity check, build label manifest |
-| 2 | `02_train_val_test_split.ipynb` | stratified 70/15/15 split |
-| 3 | `03_train_all_experiments.ipynb` | train all 5 models x 3 seeds |
-| 4 | `04_test_set_evaluation.ipynb` | test-set metrics, aggregated over seeds |
-| 5 | `05_model_comparison.ipynb` | STL vs MTL per task, EW/UW/DWA head-to-head |
-| 6 | `06_gradcam_analysis.ipynb` | per-head Grad-CAM on the best model |
+| 2 | `02_train_val_test_split.ipynb` | time-group split, verified and saved |
+| 3 | `03_train_all_experiments.ipynb` | train 6 configurations x 3 seeds |
+| 4 | `04_test_set_evaluation.ipynb` | test metrics in long format, raw logits |
+| 5 | `05_model_comparison.ipynb` | paired per-seed differences, 3 stages |
+| 6 | `06_gradcam_analysis.ipynb` | per-head Grad-CAM on the median instance |
 
 Each notebook clones this repository at the top of its first cell and is
 runnable independently -- Colab does not persist state between notebooks, so
