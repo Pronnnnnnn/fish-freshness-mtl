@@ -16,3 +16,6 @@ Thumbs.db
 
 # Claude
 .claude/
+
+# Internal working instructions, not part of the published methodology
+PROMPTS.md
