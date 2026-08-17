@@ -1,8 +1,12 @@
-"""Grad-CAM (Selvaraju et al., ICCV 2017) computed separately per task head,
-so each head's attention can be inspected independently -- in particular,
-whether either head relies on background rather than the eye region.
+"""Grad-CAM (Selvaraju et al., ICCV 2017), computed per task head.
+
+Strictly post-hoc: it inspects the chosen model, and never informs model
+selection or any hyperparameter. Gradients are taken from raw logits, not
+probabilities, and the model stays in eval() so dropout is off and the maps
+are deterministic.
 """
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 from pytorch_grad_cam import GradCAM
@@ -10,6 +14,9 @@ from pytorch_grad_cam.utils.image import show_cam_on_image
 from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
 
 from models import MultiTaskModel
+
+GRADCAM_SAMPLE_SEED = 2026
+IMAGES_PER_COMBINATION = 2
 
 
 class SingleHeadWrapper(nn.Module):
@@ -28,8 +35,36 @@ class SingleHeadWrapper(nn.Module):
 
 
 def get_target_layer(mtl_model: MultiTaskModel) -> nn.Module:
-    """Last conv layer before global pooling -- the backbone's `conv_head`."""
+    """Last spatial feature map before global average pooling."""
     return mtl_model.backbone.conv_head
+
+
+def select_median_seed(validation_joint_accuracy: dict[int, float]) -> int:
+    """Picks the seed whose validation joint accuracy is the middle of three.
+
+    Deliberately the median rather than the best, and measured on validation
+    rather than test: the test set stays untouched by any selection decision,
+    and a median instance represents typical behaviour instead of a
+    favourable draw.
+    """
+    if not validation_joint_accuracy:
+        raise ValueError("no seeds supplied")
+    ordered = sorted(validation_joint_accuracy.items(), key=lambda kv: kv[1])
+    return ordered[len(ordered) // 2][0]
+
+
+def sample_images(test_df: pd.DataFrame, per_combination: int = IMAGES_PER_COMBINATION,
+                  random_state: int = GRADCAM_SAMPLE_SEED) -> pd.DataFrame:
+    """Stratified random sample, `per_combination` images per class combination.
+
+    Fixed in advance and drawn at random rather than hand-picked, so the
+    panel cannot be curated toward flattering examples.
+    """
+    return (
+        test_df.groupby("combined_class", group_keys=False)
+        .apply(lambda g: g.sample(n=min(per_combination, len(g)), random_state=random_state))
+        .reset_index(drop=True)
+    )
 
 
 def compute_gradcam(
