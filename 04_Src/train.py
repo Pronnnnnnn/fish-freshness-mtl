@@ -23,10 +23,25 @@ from models import MultiTaskModel, SingleTaskModel
 
 
 def set_seed(seed: int) -> None:
+    """Seeds every randomness source a run touches.
+
+    Only affects weight initialisation, sampler draws, and DataLoader
+    ordering. The data split is drawn separately (see split_utils) and is
+    deliberately out of reach of this seed.
+    """
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+
+def _worker_init_fn(worker_id: int) -> None:
+    """Gives each DataLoader worker a distinct but reproducible seed."""
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
 
 
 @dataclass
@@ -40,15 +55,30 @@ class TrainConfig:
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def _make_loaders(train_df, val_df, dataset_root, cfg: TrainConfig):
+def _make_loaders(train_df, val_df, dataset_root, cfg: TrainConfig, seed: int):
     train_ds = FishEyeDataset(train_df, dataset_root, transform=train_transform)
     val_ds = FishEyeDataset(val_df, dataset_root, transform=eval_transform)
-    sampler = make_balanced_sampler(train_df)
+
+    # Seeded generators so sampler draws and batch ordering repeat exactly
+    # for a given seed.
+    sampler_generator = torch.Generator().manual_seed(seed)
+    loader_generator = torch.Generator().manual_seed(seed)
+
+    sampler = make_balanced_sampler(train_df, generator=sampler_generator)
     train_loader = DataLoader(
-        train_ds, batch_size=cfg.batch_size, sampler=sampler, num_workers=cfg.num_workers
+        train_ds,
+        batch_size=cfg.batch_size,
+        sampler=sampler,
+        num_workers=cfg.num_workers,
+        generator=loader_generator,
+        worker_init_fn=_worker_init_fn,
     )
     val_loader = DataLoader(
-        val_ds, batch_size=cfg.batch_size, shuffle=False, num_workers=cfg.num_workers
+        val_ds,
+        batch_size=cfg.batch_size,
+        shuffle=False,
+        num_workers=cfg.num_workers,
+        worker_init_fn=_worker_init_fn,
     )
     return train_loader, val_loader
 
@@ -69,7 +99,7 @@ def train_single_task(
     log_prefix = f"[{run_name}] " if run_name else ""
 
     num_classes = 8 if task == "species" else 3
-    train_loader, val_loader = _make_loaders(train_df, val_df, dataset_root, cfg)
+    train_loader, val_loader = _make_loaders(train_df, val_df, dataset_root, cfg, seed)
 
     model = SingleTaskModel(num_classes=num_classes, pretrained=True).to(cfg.device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
@@ -175,7 +205,7 @@ def train_multitask(
     set_seed(seed)
     log_prefix = f"[{run_name}] " if run_name else ""
 
-    train_loader, val_loader = _make_loaders(train_df, val_df, dataset_root, cfg)
+    train_loader, val_loader = _make_loaders(train_df, val_df, dataset_root, cfg, seed)
 
     model = MultiTaskModel(pretrained=True).to(cfg.device)
     loss_strategy = build_loss_strategy(loss_strategy_name).to(cfg.device)

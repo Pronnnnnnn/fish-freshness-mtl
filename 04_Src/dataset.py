@@ -61,8 +61,13 @@ class FishEyeDataset(Dataset):
         return image, species_idx, freshness_idx
 
 
-def make_balanced_sampler(manifest_df: pd.DataFrame) -> WeightedRandomSampler:
-    """Inverse-frequency sampler over the 24-class combination."""
+def make_balanced_sampler(
+    manifest_df: pd.DataFrame, generator: torch.Generator | None = None
+) -> WeightedRandomSampler:
+    """Inverse-frequency sampler over the 24-class combination.
+
+    Takes a seeded generator so the draw sequence is reproducible per run.
+    """
     class_counts = manifest_df["combined_class"].value_counts()
     class_weights = 1.0 / class_counts
     sample_weights = manifest_df["combined_class"].map(class_weights).values
@@ -70,4 +75,5 @@ def make_balanced_sampler(manifest_df: pd.DataFrame) -> WeightedRandomSampler:
         weights=torch.as_tensor(sample_weights, dtype=torch.double),
         num_samples=len(manifest_df),
         replacement=True,
+        generator=generator,
     )
