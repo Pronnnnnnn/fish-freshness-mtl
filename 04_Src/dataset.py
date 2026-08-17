@@ -40,7 +40,12 @@ eval_transform = transforms.Compose(
 
 
 class FishEyeDataset(Dataset):
-    """Reads (image, species_idx, freshness_idx) triples from a manifest DataFrame."""
+    """Reads (image, species_idx, freshness_idx, combined_idx) from a manifest.
+
+    combined_idx is the flat 24-class label, carried alongside the two task
+    labels so the same Dataset serves the single-task, flat, and multi-task
+    models without a separate loader.
+    """
 
     def __init__(self, manifest_df: pd.DataFrame, dataset_root: str | Path, transform=None):
         self.df = manifest_df.reset_index(drop=True)
@@ -58,7 +63,8 @@ class FishEyeDataset(Dataset):
             image = self.transform(image)
         species_idx = torch.tensor(row["species_idx"], dtype=torch.long)
         freshness_idx = torch.tensor(row["freshness_idx"], dtype=torch.long)
-        return image, species_idx, freshness_idx
+        combined_idx = torch.tensor(row["combined_idx"], dtype=torch.long)
+        return image, species_idx, freshness_idx, combined_idx
 
 
 def make_balanced_sampler(

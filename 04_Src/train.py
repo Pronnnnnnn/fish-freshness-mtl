@@ -19,7 +19,8 @@ from torch.utils.data import DataLoader
 
 from dataset import FishEyeDataset, eval_transform, make_balanced_sampler, train_transform
 from loss_weighting import DynamicWeightAveraging, build_loss_strategy
-from models import MultiTaskModel, SingleTaskModel
+from manifest_utils import combined_to_tasks
+from models import FlatCombinedModel, MultiTaskModel, SingleTaskModel
 
 
 def set_seed(seed: int) -> None:
@@ -115,7 +116,7 @@ def train_single_task(
         model.train()
         train_loss_sum = 0.0
         train_correct = 0
-        for images, species_idx, freshness_idx in train_loader:
+        for images, species_idx, freshness_idx, combined_idx in train_loader:
             labels = (species_idx if task == "species" else freshness_idx).to(cfg.device)
             images = images.to(cfg.device)
 
@@ -136,7 +137,7 @@ def train_single_task(
         val_loss_sum = 0.0
         val_true, val_pred = [], []
         with torch.no_grad():
-            for images, species_idx, freshness_idx in val_loader:
+            for images, species_idx, freshness_idx, combined_idx in val_loader:
                 labels = (species_idx if task == "species" else freshness_idx).to(cfg.device)
                 images = images.to(cfg.device)
                 logits = model(images)
@@ -191,6 +192,126 @@ def train_single_task(
     return {"history": history, "best_val_f1": best_val_f1, "training_time_sec": elapsed}
 
 
+def train_flat24(
+    train_df,
+    val_df,
+    dataset_root,
+    checkpoint_path,
+    seed: int,
+    cfg: TrainConfig = TrainConfig(),
+    run_name: str = "",
+    verbose: bool = True,
+):
+    """Trains the flat 24-class baseline.
+
+    Monitored on the unweighted mean of species and freshness macro F1
+    *after* mapping predictions back to the two tasks -- not on 24-class F1
+    -- so its checkpoint is selected on the same quantity as the multi-task
+    models it will be compared against.
+    """
+    set_seed(seed)
+    log_prefix = f"[{run_name}] " if run_name else ""
+
+    train_loader, val_loader = _make_loaders(train_df, val_df, dataset_root, cfg, seed)
+
+    model = FlatCombinedModel(pretrained=True).to(cfg.device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.max_epochs)
+    criterion = nn.CrossEntropyLoss()
+
+    best_val_f1 = -float("inf")
+    epochs_without_improvement = 0
+    history = []
+    start_time = time.time()
+
+    for epoch in range(cfg.max_epochs):
+        model.train()
+        train_loss_sum = 0.0
+        train_correct = 0
+        for images, species_idx, freshness_idx, combined_idx in train_loader:
+            images = images.to(cfg.device)
+            combined_idx = combined_idx.to(cfg.device)
+
+            optimizer.zero_grad()
+            logits = model(images)
+            loss = criterion(logits, combined_idx)
+            loss.backward()
+            optimizer.step()
+            train_loss_sum += loss.item() * images.size(0)
+            train_correct += (logits.argmax(dim=1) == combined_idx).sum().item()
+
+        scheduler.step()
+        n_train = len(train_loader.dataset)
+        train_loss = train_loss_sum / n_train
+        train_accuracy_combined = train_correct / n_train
+
+        model.eval()
+        val_loss_sum = 0.0
+        combined_true, combined_pred = [], []
+        with torch.no_grad():
+            for images, species_idx, freshness_idx, combined_idx in val_loader:
+                images = images.to(cfg.device)
+                combined_idx = combined_idx.to(cfg.device)
+                logits = model(images)
+                loss = criterion(logits, combined_idx)
+                val_loss_sum += loss.item() * images.size(0)
+                combined_true.append(combined_idx.cpu().numpy())
+                combined_pred.append(logits.argmax(dim=1).cpu().numpy())
+        val_loss = val_loss_sum / len(val_loader.dataset)
+        combined_true = np.concatenate(combined_true)
+        combined_pred = np.concatenate(combined_pred)
+
+        species_true, freshness_true = combined_to_tasks(combined_true)
+        species_pred, freshness_pred = combined_to_tasks(combined_pred)
+        val_f1_species = f1_score(species_true, species_pred, average="macro")
+        val_f1_freshness = f1_score(freshness_true, freshness_pred, average="macro")
+        val_f1_mean = (val_f1_species + val_f1_freshness) / 2
+
+        history.append(
+            {
+                "epoch": epoch,
+                "train_loss": train_loss,
+                "train_accuracy_combined": train_accuracy_combined,
+                "val_loss": val_loss,
+                "val_accuracy_combined": float((combined_true == combined_pred).mean()),
+                "val_accuracy_species": float((species_true == species_pred).mean()),
+                "val_accuracy_freshness": float((freshness_true == freshness_pred).mean()),
+                "val_f1_species": val_f1_species,
+                "val_f1_freshness": val_f1_freshness,
+                "val_f1_mean": val_f1_mean,
+            }
+        )
+
+        if val_f1_mean > best_val_f1:
+            best_val_f1 = val_f1_mean
+            epochs_without_improvement = 0
+            marker = " (best, checkpoint saved)"
+            torch.save(
+                {"epoch": epoch, "model_state": model.state_dict(), "val_f1_mean": val_f1_mean},
+                checkpoint_path,
+            )
+        else:
+            epochs_without_improvement += 1
+            marker = f" (no improvement, {epochs_without_improvement}/{cfg.patience})"
+
+        if verbose:
+            print(
+                f"{log_prefix}epoch {epoch}: train_loss={train_loss:.4f} "
+                f"val_loss={val_loss:.4f} val_f1_species={val_f1_species:.4f} "
+                f"val_f1_freshness={val_f1_freshness:.4f} val_f1_mean={val_f1_mean:.4f}{marker}"
+            )
+
+        if epochs_without_improvement >= cfg.patience:
+            if verbose:
+                print(f"{log_prefix}early stopping at epoch {epoch} (best val_f1_mean={best_val_f1:.4f})")
+            break
+
+    elapsed = time.time() - start_time
+    if verbose:
+        print(f"{log_prefix}done in {elapsed / 60:.1f} min, best val_f1_mean={best_val_f1:.4f}")
+    return {"history": history, "best_val_f1": best_val_f1, "training_time_sec": elapsed}
+
+
 def train_multitask(
     loss_strategy_name: str,  # "EW", "UW", or "DWA"
     train_df,
@@ -228,7 +349,7 @@ def train_multitask(
         train_species_correct = 0
         train_freshness_correct = 0
 
-        for images, species_idx, freshness_idx in train_loader:
+        for images, species_idx, freshness_idx, combined_idx in train_loader:
             images = images.to(cfg.device)
             species_idx = species_idx.to(cfg.device)
             freshness_idx = freshness_idx.to(cfg.device)
@@ -263,7 +384,7 @@ def train_multitask(
         val_loss_sum = 0.0
         species_true, species_pred, freshness_true, freshness_pred = [], [], [], []
         with torch.no_grad():
-            for images, species_idx, freshness_idx in val_loader:
+            for images, species_idx, freshness_idx, combined_idx in val_loader:
                 images = images.to(cfg.device)
                 species_idx = species_idx.to(cfg.device)
                 freshness_idx = freshness_idx.to(cfg.device)

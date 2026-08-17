@@ -15,6 +15,7 @@ import torch.nn as nn
 
 NUM_SPECIES = 8
 NUM_FRESHNESS = 3
+NUM_COMBINED = NUM_SPECIES * NUM_FRESHNESS
 BACKBONE_NAME = "tf_efficientnetv2_b0"
 
 
@@ -43,6 +44,25 @@ class SingleTaskModel(nn.Module):
         super().__init__()
         self.backbone, num_features = build_backbone(pretrained)
         self.head = _Head(num_features, num_classes)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        pooled = self.backbone(x)
+        return self.head(pooled)
+
+
+class FlatCombinedModel(nn.Module):
+    """One head over all 24 species x freshness combinations.
+
+    A baseline for the problem formulation itself: it predicts the pair
+    jointly instead of factorising it into two heads. Its predictions are
+    mapped back to (species, freshness) before evaluation so every metric is
+    computed exactly as it is for the multi-task models.
+    """
+
+    def __init__(self, pretrained: bool = True):
+        super().__init__()
+        self.backbone, num_features = build_backbone(pretrained)
+        self.head = _Head(num_features, NUM_COMBINED)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         pooled = self.backbone(x)
