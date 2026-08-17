@@ -1,70 +1,140 @@
-"""Model comparison procedure (two stages):
+"""Model comparison via paired per-seed differences.
 
-1. Single-task vs multi-task, per task, per loss-weighting strategy.
-2. Head-to-head ranking of the three loss-weighting strategies.
+Every configuration is trained under the same three seeds and evaluated on
+the same test set, so for a given seed two configurations form a matched
+pair. Comparing those pairs directly keeps the pairing information that
+contrasting two independent means would discard.
 
-With only 3 seeds per model, a formal significance test has no real
-power, so a difference is only called meaningful if it exceeds the
-larger of the two configurations' seed-to-seed standard deviations --
-otherwise the configurations are treated as equivalent.
+No numeric threshold is applied. With n=3 a rule such as "mean difference
+must exceed its standard deviation" has no theoretical basis and reads as a
+significance test without being one. A configuration is instead reported as
+a candidate winner only when its paired difference carries the same sign on
+all three seeds, with the mean and standard deviation of the differences
+reported alongside for magnitude. Formal tests (paired t-test) are not used:
+n=3 has no meaningful power.
 """
 import pandas as pd
 
-
-def exceeds_seed_variation(mean_a: float, std_a: float, mean_b: float, std_b: float) -> bool:
-    """True if the two means differ by more than the larger of the two stds."""
-    return abs(mean_a - mean_b) > max(std_a, std_b)
+RESULT_COLUMNS = ["model", "seed", "task", "metric", "value"]
 
 
-def compare_stl_vs_mtl(stl_mean: float, stl_std: float, mtl_df: pd.DataFrame, metric_col: str) -> pd.DataFrame:
-    """One row per MTL strategy: STL mean/std vs that strategy's mean/std on `metric_col`."""
-    summary = mtl_df.groupby("model")[metric_col].agg(["mean", "std"])
+def to_long_format(rows: list[dict]) -> pd.DataFrame:
+    """Normalises per-run metric dicts into one row per model/seed/task/metric."""
+    records = []
+    for row in rows:
+        model, seed = row["model"], row["seed"]
+        for task, metrics in row["tasks"].items():
+            for metric, value in metrics.items():
+                records.append(
+                    {"model": model, "seed": seed, "task": task, "metric": metric, "value": value}
+                )
+    return pd.DataFrame(records, columns=RESULT_COLUMNS)
+
+
+def _series(long_df: pd.DataFrame, model: str, task: str, metric: str) -> pd.Series:
+    """Metric values for one configuration, indexed by seed."""
+    sel = long_df[
+        (long_df["model"] == model) & (long_df["task"] == task) & (long_df["metric"] == metric)
+    ]
+    if sel.empty:
+        raise KeyError(f"no rows for model={model!r} task={task!r} metric={metric!r}")
+    return sel.set_index("seed")["value"].sort_index()
+
+
+def paired_difference(
+    long_df: pd.DataFrame, model_a: str, model_b: str, task: str, metric: str
+) -> dict:
+    """Per-seed differences (model_b - model_a) on one metric.
+
+    `consistent_sign` is True when model_b beats model_a on every seed, or
+    loses on every seed -- the reporting criterion. It is the only verdict
+    produced; no threshold is applied to the magnitude.
+    """
+    a = _series(long_df, model_a, task, metric)
+    b = _series(long_df, model_b, task, metric)
+    common = a.index.intersection(b.index)
+    if len(common) == 0:
+        raise ValueError(f"{model_a} and {model_b} share no seeds")
+
+    diffs = (b.loc[common] - a.loc[common]).sort_index()
+    positive = (diffs > 0).all()
+    negative = (diffs < 0).all()
+
+    return {
+        "task": task,
+        "metric": metric,
+        "model_a": model_a,
+        "model_b": model_b,
+        "n_seeds": len(common),
+        "per_seed_differences": diffs.to_dict(),
+        "mean_difference": float(diffs.mean()),
+        "std_difference": float(diffs.std(ddof=1)) if len(diffs) > 1 else float("nan"),
+        "consistent_sign": bool(positive or negative),
+        "direction": "b_better" if positive else ("a_better" if negative else "mixed"),
+    }
+
+
+def compare_many(
+    long_df: pd.DataFrame, pairs: list[tuple[str, str]], task: str, metric: str
+) -> pd.DataFrame:
+    """paired_difference over several model pairs, one row each."""
     rows = []
-    for strategy, row in summary.iterrows():
-        rows.append(
-            {
-                "strategy": strategy,
-                "stl_mean": stl_mean,
-                "stl_std": stl_std,
-                "mtl_mean": row["mean"],
-                "mtl_std": row["std"],
-                "delta": row["mean"] - stl_mean,
-                "exceeds_seed_variation": exceeds_seed_variation(stl_mean, stl_std, row["mean"], row["std"]),
-            }
-        )
+    for model_a, model_b in pairs:
+        d = paired_difference(long_df, model_a, model_b, task, metric)
+        d["per_seed_differences"] = str(d["per_seed_differences"])
+        rows.append(d)
     return pd.DataFrame(rows)
 
 
-def compare_efficiency(stl_value: float, mtl_df: pd.DataFrame, value_col: str) -> pd.DataFrame:
-    """Same shape as compare_stl_vs_mtl but for a value with no seed variance to test
-    (parameter count and inference time are near-deterministic given a fixed architecture)."""
-    summary = mtl_df.groupby("model")[value_col].mean()
-    return pd.DataFrame(
-        {
-            "strategy": summary.index,
-            "stl_value": stl_value,
-            "mtl_value": summary.values,
-            "savings": stl_value - summary.values,
-            "savings_pct": (stl_value - summary.values) / stl_value * 100,
-        }
-    )
+def stl_vs_mtl(long_df: pd.DataFrame, metric: str = "f1_macro") -> pd.DataFrame:
+    """Stage 1 -- does folding the two tasks together cost either of them?
+
+    Model A against each MTL variant on species, Model B against each on
+    freshness: 6 comparison points.
+    """
+    mtl = ["ModelD_EW", "ModelD_UW", "ModelD_DWA"]
+    species = compare_many(long_df, [("ModelA_species", m) for m in mtl], "species", metric)
+    freshness = compare_many(long_df, [("ModelB_freshness", m) for m in mtl], "freshness", metric)
+    return pd.concat([species, freshness], ignore_index=True)
 
 
-def compare_strategies(multitask_df: pd.DataFrame, metric_col: str) -> dict:
-    """Ranks EW/UW/DWA on one metric; flags whether the leader's margin
-    over the runner-up exceeds seed variation."""
-    summary = multitask_df.groupby("model")[metric_col].agg(["mean", "std"]).sort_values(
-        "mean", ascending=False
+def flat_vs_mtl(long_df: pd.DataFrame, metric: str = "f1_macro") -> pd.DataFrame:
+    """Stage 2 -- flat 24-class formulation against the two-head one."""
+    mtl = ["ModelD_EW", "ModelD_UW", "ModelD_DWA"]
+    pairs = [("ModelC_flat24", m) for m in mtl]
+    frames = [
+        compare_many(long_df, pairs, "species", metric),
+        compare_many(long_df, pairs, "freshness", metric),
+        compare_many(long_df, pairs, "joint", "joint_accuracy"),
+    ]
+    return pd.concat(frames, ignore_index=True)
+
+
+def strategy_pairs(long_df: pd.DataFrame, task: str, metric: str) -> pd.DataFrame:
+    """Stage 3 -- the three weighting strategies against each other."""
+    pairs = [
+        ("ModelD_EW", "ModelD_UW"),
+        ("ModelD_EW", "ModelD_DWA"),
+        ("ModelD_UW", "ModelD_DWA"),
+    ]
+    return compare_many(long_df, pairs, task, metric)
+
+
+def efficiency_summary(long_df: pd.DataFrame) -> pd.DataFrame:
+    """Parameters and inference time per model, plus speedup over A+B.
+
+    The realistic alternative to one multi-task model is running the two
+    single-task models in sequence, so the baseline is their sum.
+    """
+    eff = long_df[long_df["task"] == "efficiency"]
+    wide = eff.pivot_table(index="model", columns="metric", values="value", aggfunc="mean")
+
+    baseline_params = wide.loc["ModelA_species", "params"] + wide.loc["ModelB_freshness", "params"]
+    baseline_time = (
+        wide.loc["ModelA_species", "inference_ms"] + wide.loc["ModelB_freshness", "inference_ms"]
     )
-    best, runner_up = summary.index[0], summary.index[1]
-    best_mean, best_std = summary.loc[best]
-    runner_mean, runner_std = summary.loc[runner_up]
-    return {
-        "metric": metric_col,
-        "best_strategy": best,
-        "best_mean": best_mean,
-        "runner_up": runner_up,
-        "runner_up_mean": runner_mean,
-        "difference": best_mean - runner_mean,
-        "exceeds_seed_variation": exceeds_seed_variation(best_mean, best_std, runner_mean, runner_std),
-    }
+
+    wide["params_vs_A_plus_B"] = baseline_params - wide["params"]
+    wide["params_savings_pct"] = (baseline_params - wide["params"]) / baseline_params * 100
+    wide["speedup_vs_A_plus_B"] = baseline_time / wide["inference_ms"]
+    return wide.round(4)
