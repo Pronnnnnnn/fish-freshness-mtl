@@ -332,8 +332,20 @@ def train_multitask(
     loss_strategy = build_loss_strategy(loss_strategy_name).to(cfg.device)
     criterion = nn.CrossEntropyLoss()
 
-    params = list(model.parameters()) + list(loss_strategy.parameters())
-    optimizer = torch.optim.AdamW(params, lr=cfg.lr, weight_decay=cfg.weight_decay)
+    # UW's log-variance parameters are excluded from weight decay: its
+    # objective already carries an s1 + s2 regulariser, and decaying them on
+    # top of that pulls both toward zero from two directions at once, driving
+    # the task weights toward uniform for reasons that have nothing to do with
+    # the uncertainty mechanism. Left in, "UW behaves like EW" would be an
+    # artefact of the optimiser rather than a finding. Empty for EW and DWA,
+    # which carry no learnable parameters.
+    optimizer = torch.optim.AdamW(
+        [
+            {"params": list(model.parameters()), "weight_decay": cfg.weight_decay},
+            {"params": list(loss_strategy.parameters()), "weight_decay": 0.0},
+        ],
+        lr=cfg.lr,
+    )
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.max_epochs)
 
     best_val_f1 = -float("inf")
