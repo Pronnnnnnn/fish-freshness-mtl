@@ -1,0 +1,17 @@
+total images: 4390
+
+per subset:
+  train   3073 images (70.0%)
+  val      658 images (15.0%)
+  test     659 images (15.0%)
+
+time groups total: 3226
+time groups spanning >1 subset: 318
+images in a spanning group: 1177 (26.8%)
+
+test images with a same-burst twin in train: 207 (31.4% of the test set)
+
+class combinations represented per subset:
+  train  24/24
+  val    24/24
+  test   24/24
