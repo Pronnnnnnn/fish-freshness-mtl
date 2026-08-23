@@ -120,6 +120,46 @@ def strategy_pairs(long_df: pd.DataFrame, task: str, metric: str) -> pd.DataFram
     return compare_many(long_df, pairs, task, metric)
 
 
+def contaminated_vs_clean(
+    test_df: pd.DataFrame,
+    train_time_groups: set,
+    y_true,
+    y_pred,
+    metric_fn,
+) -> dict:
+    """Scores one model separately on the leaked and unleaked parts of its test set.
+
+    A cross-split comparison confounds leakage with the two splits having
+    different test sets. Here the model, its training, and the metric are
+    held fixed, and only the rows differ: test images whose burst also
+    appears in training, against those where it does not. The gap is the
+    leakage effect with nothing else moving.
+
+    Class composition can still differ between the two portions, so the
+    per-portion class counts are returned for inspection.
+    """
+    import numpy as np
+
+    is_contaminated = test_df["time_group"].isin(train_time_groups).to_numpy()
+    y_true, y_pred = np.asarray(y_true), np.asarray(y_pred)
+
+    if is_contaminated.sum() == 0 or (~is_contaminated).sum() == 0:
+        raise ValueError("one portion is empty; this split has no leakage to measure")
+
+    contaminated = metric_fn(y_true[is_contaminated], y_pred[is_contaminated])
+    clean = metric_fn(y_true[~is_contaminated], y_pred[~is_contaminated])
+
+    return {
+        "n_contaminated": int(is_contaminated.sum()),
+        "n_clean": int((~is_contaminated).sum()),
+        "score_contaminated": float(contaminated),
+        "score_clean": float(clean),
+        "inflation": float(contaminated - clean),
+        "classes_contaminated": test_df.loc[is_contaminated, "combined_class"].nunique(),
+        "classes_clean": test_df.loc[~is_contaminated, "combined_class"].nunique(),
+    }
+
+
 def efficiency_summary(long_df: pd.DataFrame) -> pd.DataFrame:
     """Parameters and inference time per model, plus speedup over A+B.
 
