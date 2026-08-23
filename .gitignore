@@ -19,3 +19,6 @@ Thumbs.db
 
 # Internal working instructions, not part of the published methodology
 PROMPTS.md
+
+# Ablation checkpoints, same reasoning as the main ones
+08_Leakage_Ablation/03_checkpoints/*.pt
