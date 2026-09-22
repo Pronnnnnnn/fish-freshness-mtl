@@ -160,6 +160,51 @@ def contaminated_vs_clean(
     }
 
 
+def contaminated_vs_clean_per_class(
+    test_df: pd.DataFrame,
+    train_time_groups: set,
+    y_true,
+    y_pred,
+    label_column: str,
+) -> pd.DataFrame:
+    """Per-class accuracy on the leaked vs unleaked parts of one test set.
+
+    The pooled version of this comparison is confounded whenever the two
+    portions differ in composition, which they do here: bursts are not spread
+    evenly over the classes, so three species never appear in the leaked
+    portion at all and the freshness mix is skewed toward one level. Comparing
+    within each class removes that, since each row holds the class fixed and
+    varies only whether the image had a twin in training.
+
+    Classes missing from either portion are returned with NaN so they are
+    visibly excluded rather than silently averaged in.
+    """
+    import numpy as np
+
+    work = test_df.reset_index(drop=True).copy()
+    work["_correct"] = np.asarray(y_true) == np.asarray(y_pred)
+    work["_contaminated"] = work["time_group"].isin(train_time_groups)
+
+    rows = []
+    for label, group in work.groupby(label_column):
+        contaminated = group[group["_contaminated"]]
+        clean = group[~group["_contaminated"]]
+        rows.append(
+            {
+                "class": label,
+                "n_contaminated": len(contaminated),
+                "n_clean": len(clean),
+                "accuracy_contaminated": contaminated["_correct"].mean() if len(contaminated) else float("nan"),
+                "accuracy_clean": clean["_correct"].mean() if len(clean) else float("nan"),
+            }
+        )
+
+    out = pd.DataFrame(rows)
+    out["inflation"] = out["accuracy_contaminated"] - out["accuracy_clean"]
+    out["comparable"] = out["n_contaminated"].gt(0) & out["n_clean"].gt(0)
+    return out
+
+
 def efficiency_summary(long_df: pd.DataFrame) -> pd.DataFrame:
     """Parameters and inference time per model, plus speedup over A+B.
 
