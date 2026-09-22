@@ -22,3 +22,6 @@ PROMPTS.md
 
 # Ablation checkpoints, same reasoning as the main ones
 08_Leakage_Ablation/03_checkpoints/*.pt
+
+# Species-conditioning checkpoints, same reasoning as the main ones
+09_Species_Conditioning/01_checkpoints/*.pt
