@@ -322,13 +322,21 @@ def train_multitask(
     cfg: TrainConfig = TrainConfig(),
     run_name: str = "",
     verbose: bool = True,
+    model_factory=MultiTaskModel,
 ):
+    """Trains any model whose forward returns (species_logits, freshness_logits).
+
+    model_factory lets a variant share this loop rather than copying it;
+    nothing below touches model internals beyond the standard nn.Module API,
+    so a variant only has to match that output signature. Defaults to
+    MultiTaskModel, leaving the D-EW/UW/DWA runs unchanged.
+    """
     set_seed(seed)
     log_prefix = f"[{run_name}] " if run_name else ""
 
     train_loader, val_loader = _make_loaders(train_df, val_df, dataset_root, cfg, seed)
 
-    model = MultiTaskModel(pretrained=True).to(cfg.device)
+    model = model_factory(pretrained=True).to(cfg.device)
     loss_strategy = build_loss_strategy(loss_strategy_name).to(cfg.device)
     criterion = nn.CrossEntropyLoss()
 

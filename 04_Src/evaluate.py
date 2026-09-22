@@ -75,8 +75,14 @@ def load_single_task_model(checkpoint_path: str, num_classes: int, device: str) 
     return model
 
 
-def load_multitask_model(checkpoint_path: str, device: str) -> torch.nn.Module:
-    model = MultiTaskModel(pretrained=False).to(device)
+def load_multitask_model(
+    checkpoint_path: str, device: str, model_factory=MultiTaskModel
+) -> torch.nn.Module:
+    """Loads any two-head model; model_factory selects the architecture.
+
+    Defaults to MultiTaskModel so existing call sites are unaffected.
+    """
+    model = model_factory(pretrained=False).to(device)
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     model.load_state_dict(ckpt["model_state"])
     model.eval()
