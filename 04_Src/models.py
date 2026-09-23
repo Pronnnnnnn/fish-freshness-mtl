@@ -83,3 +83,42 @@ class MultiTaskModel(nn.Module):
         species_logits = self.species_head(pooled)
         freshness_logits = self.freshness_head(pooled)
         return species_logits, freshness_logits
+
+
+class SpeciesConditionedMTL(nn.Module):
+    """Multi-task model whose freshness head also sees the species prediction.
+
+    Identical to MultiTaskModel except that the freshness classifier takes
+    the backbone features concatenated with the species head's softmax
+    output, so freshness can be judged conditional on the species -- which
+    the organoleptic standard implies, since a fresh pupil is defined per
+    species.
+
+    The species probabilities are detached. Without that the freshness loss
+    would also train the species head, this model's species head would stop
+    being comparable to MultiTaskModel's, and a change in freshness could no
+    longer be attributed to conditioning rather than to a differently trained
+    species head. Dropout applies to the backbone features only; the
+    probabilities pass through unmodified.
+
+    forward() returns the same (species_logits, freshness_logits) pair as
+    MultiTaskModel, so the shared training and evaluation paths take it as is.
+    """
+
+    def __init__(self, pretrained: bool = True):
+        super().__init__()
+        self.backbone, num_features = build_backbone(pretrained)
+        self.species_head = _Head(num_features, NUM_SPECIES)
+
+        self.freshness_dropout = nn.Dropout(0.2)
+        self.freshness_fc = nn.Linear(num_features + NUM_SPECIES, NUM_FRESHNESS)
+
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        pooled = self.backbone(x)
+        species_logits = self.species_head(pooled)
+
+        species_probs = torch.softmax(species_logits, dim=1).detach()
+        conditioned = torch.cat([self.freshness_dropout(pooled), species_probs], dim=1)
+        freshness_logits = self.freshness_fc(conditioned)
+
+        return species_logits, freshness_logits
